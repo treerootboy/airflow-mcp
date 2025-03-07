@@ -166,14 +166,21 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="get-daily-report",
-            description="Get a daily report for a DAG including execution summary and failure details",
+            description="Get a report for DAG runs within specified time range",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "dag_id": {"type": "string"},
-                    "date": {
+                    "start_date": {
                         "type": "string",
-                        "description": "Date in YYYY-MM-DD format (default: today)",
+                        "description": "Start date in YYYY-MM-DD format (default: today)",
+                        "required": False
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of days to include (default: 1, max: 30)",
+                        "minimum": 1,
+                        "maximum": 30,
                         "required": False
                     }
                 },
@@ -357,8 +364,9 @@ State: {data["state"]}
         if not dag_id:
             raise ValueError("Missing dag_id")
 
-        date = arguments.get("date")
-        report = await get_daily_report(dag_id, date)
+        start_date = arguments.get("start_date")
+        days = int(arguments.get("days", 1))
+        report = await get_daily_report(dag_id, start_date, days)
         return [
             types.TextContent(
                 type="text",
@@ -477,20 +485,25 @@ async def get_dag_logs(
 
 async def get_daily_report(
     dag_id: str,
-    date: str | None = None
+    start_date: str | None = None,
+    days: int = 1
 ) -> str:
-    """Get a daily report for a DAG including execution summary and failure details with error analysis."""
-    if not date:
-        date = datetime.utcnow().strftime("%Y-%m-%d")
+    """Get a DAG report for specified date range with execution summary and failure analysis."""
+    if days < 1 or days > 30:
+        return "Days parameter must be between 1 and 30"
+
+    if not start_date:
+        start_date = datetime.utcnow().strftime("%Y-%m-%d")
     
     try:
-        # 解析输入日期
-        parsed_date = datetime.strptime(date, "%Y-%m-%d")
-        # 格式化为Airflow API所需的ISO格式
+        # 解析起始日期
+        parsed_date = datetime.strptime(start_date, "%Y-%m-%d")
+        # 计算日期范围
+        from datetime import timedelta
         date_start = parsed_date.strftime("%Y-%m-%dT00:00:00+00:00")
-        date_end = parsed_date.strftime("%Y-%m-%dT23:59:59+00:00")
+        date_end = (parsed_date + timedelta(days=days)).strftime("%Y-%m-%dT23:59:59+00:00")
     except ValueError:
-        return f"Invalid date format: {date}. Please use YYYY-MM-DD format."
+        return f"Invalid date format: {start_date}. Please use YYYY-MM-DD format."
 
     # 直接从API获取运行记录
     params = {
