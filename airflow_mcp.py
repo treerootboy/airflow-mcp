@@ -166,11 +166,10 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="get-daily-report",
-            description="Get a report for DAG runs within specified time range",
+            description="Get a consolidated report for all DAG runs within specified time range",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "dag_id": {"type": "string"},
                     "start_date": {
                         "type": "string",
                         "description": "Start date in YYYY-MM-DD format (default: today)",
@@ -184,7 +183,7 @@ async def handle_list_tools() -> list[types.Tool]:
                         "required": False
                     }
                 },
-                "required": ["dag_id"]
+                "required": []
             },
         ),
         types.Tool(
@@ -360,13 +359,9 @@ State: {data["state"]}
         ]
 
     if name == "get-daily-report":
-        dag_id = arguments.get("dag_id")
-        if not dag_id:
-            raise ValueError("Missing dag_id")
-
         start_date = arguments.get("start_date")
         days = int(arguments.get("days", 1))
-        report = await get_daily_report(dag_id, start_date, days)
+        report = await get_daily_report(start_date=start_date, days=days)
         return [
             types.TextContent(
                 type="text",
@@ -484,11 +479,10 @@ async def get_dag_logs(
     return "\n".join(result) if result else "No logs found."
 
 async def get_daily_report(
-    dag_id: str,
     start_date: str | None = None,
     days: int = 1
 ) -> str:
-    """Get a DAG report for specified date range with execution summary and failure analysis."""
+    """Get a consolidated report for all DAG runs within specified time range."""
     if days < 1 or days > 30:
         return "Days parameter must be between 1 and 30"
 
@@ -497,31 +491,53 @@ async def get_daily_report(
     
     from datetime import timedelta
     
-    # 初始化统计数据
     try:
         # 解析起始日期
         parsed_date = datetime.strptime(start_date, "%Y-%m-%d")
     except ValueError:
         return f"Invalid date format: {start_date}. Please use YYYY-MM-DD format."
+    
+    # 获取所有DAG列表
+    dags_data = await list_dags()
+    if "Unable to fetch DAGs" in dags_data:
+        return "Unable to fetch DAGs list"
+    
+    dag_ids = dags_data.split("\n")
+    
+    # 初始化总体统计
+    grand_total = {
+        "total": 0,
+        "success": 0,
+        "failed": 0,
+        "running": 0,
+        "other": 0,
+        "failed_tasks": []
+    }
+    
+    # 按天统计数据
+    daily_summaries = []
+    for day in range(days):
+        current_date = parsed_date + timedelta(days=day)
+        date_str = current_date.strftime("%Y-%m-%d")
+        date_start = current_date.strftime("%Y-%m-%dT00:00:00+00:00")
+        date_end = current_date.strftime("%Y-%m-%dT23:59:59+00:00")
         
-        total_stats = {
+        daily_total = {
+            "date": date_str,
             "total": 0,
             "success": 0,
             "failed": 0,
             "running": 0,
             "other": 0,
-            "failed_tasks": []
+            "by_dag": {}
         }
         
-        daily_stats = []
-        
-        # 遍历每一天
-        for day in range(days):
-            current_date = parsed_date + timedelta(days=day)
-            date_start = current_date.strftime("%Y-%m-%dT00:00:00+00:00")
-            date_end = current_date.strftime("%Y-%m-%dT23:59:59+00:00")
-            
-            # 使用get_dag_status获取当天的运行记录
+        # 收集每个DAG的数据
+        for dag_id in dag_ids:
+            if not dag_id:  # 跳过空行
+                continue
+                
+            # 获取当天的运行记录
             status_data = await get_dag_status(
                 dag_id,
                 limit=100,
@@ -530,113 +546,110 @@ async def get_daily_report(
                 order_by="-start_date"
             )
             
-            # 如果获取失败
-            if "Unable to fetch status" in status_data:
-                daily_stats.append({
-                    "date": current_date.strftime("%Y-%m-%d"),
-                    "error": "Unable to fetch data"
-                })
-                continue
-                
-            # 解析get_dag_status返回的字符串
-            runs_data = status_data.split("\n")
-            total_runs = 0
-            success_runs = 0
-            failed_runs = 0
-            running_runs = 0
-            
-            # 分析运行状态
-            for line in runs_data:
-                if "State: " in line:
-                    state = line.split("State: ")[1].strip()
-                    total_runs += 1
-                    if state == "success":
-                        success_runs += 1
-                    elif state == "failed":
-                        failed_runs += 1
-                    elif state == "running":
-                        running_runs += 1
-            
-            day_stats = {
-                "date": current_date.strftime("%Y-%m-%d"),
-                "total": total_runs,
-                "success": success_runs,
-                "failed": failed_runs,
-                "running": running_runs,
-                "other": total_runs - (success_runs + failed_runs + running_runs)
+            # 初始化该DAG的统计
+            dag_stats = {
+                "total": 0,
+                "success": 0,
+                "failed": 0,
+                "running": 0,
+                "other": 0
             }
             
-            # 更新总体统计
+            if "Unable to fetch status" not in status_data:
+                # 分析运行状态
+                for line in status_data.split("\n"):
+                    if "State: " in line:
+                        state = line.split("State: ")[1].strip()
+                        dag_stats["total"] += 1
+                        if state == "success":
+                            dag_stats["success"] += 1
+                        elif state == "failed":
+                            dag_stats["failed"] += 1
+                        elif state == "running":
+                            dag_stats["running"] += 1
+                        else:
+                            dag_stats["other"] += 1
+                
+                # 如果有失败的任务，获取详细信息
+                if dag_stats["failed"] > 0:
+                    failed_status = await get_dag_status(
+                        dag_id,
+                        limit=100,
+                        execution_date_gte=date_start,
+                        execution_date_lte=date_end,
+                        order_by="-start_date",
+                        state="failed"
+                    )
+                    
+                    for line in failed_status.split("\n"):
+                        if line.startswith("Run ID: "):
+                            run_id = line.split("Run ID: ")[1].strip()
+                            logs = await get_dag_logs(dag_id, run_id)
+                            analysis = analyze_logs(logs)
+                            grand_total["failed_tasks"].append({
+                                "date": date_str,
+                                "dag_id": dag_id,
+                                "run_id": run_id,
+                                "analysis": analysis
+                            })
+            
+            # 更新日统计
+            daily_total["by_dag"][dag_id] = dag_stats
             for key in ["total", "success", "failed", "running", "other"]:
-                total_stats[key] += day_stats[key]
-            
-            # 获取当天的失败运行记录
-            failed_status = await get_dag_status(
-                dag_id,
-                limit=100,
-                execution_date_gte=date_start,
-                execution_date_lte=date_end,
-                order_by="-start_date",
-                state="failed"
-            )
-            
-            # 提取失败运行的ID
-            for line in failed_status.split("\n"):
-                if line.startswith("Run ID: "):
-                    run_id = line.split("Run ID: ")[1].strip()
-                    # 获取失败任务的日志
-                    logs = await get_dag_logs(dag_id, run_id)
-                    analysis = analyze_logs(logs)
-                    total_stats["failed_tasks"].append({
-                        "date": current_date.strftime("%Y-%m-%d"),
-                        "run_id": run_id,
-                        "analysis": analysis
-                    })
-            
-            daily_stats.append(day_stats)
+                daily_total[key] += dag_stats[key]
         
-        # 生成报告
-        result = [
-            f"DAG Report: {dag_id}",
-            f"Period: {start_date} to {(parsed_date + timedelta(days=days-1)).strftime('%Y-%m-%d')}",
-            "=" * 50,
-            "\nOverall Statistics:",
-            f"Total Runs: {total_stats['total']}",
-            f"Successful: {total_stats['success']}",
-            f"Failed: {total_stats['failed']}",
-            f"Running: {total_stats['running']}",
-            f"Other States: {total_stats['other']}",
-            "\nDaily Breakdown:",
-            "-" * 50
-        ]
+        # 更新总体统计
+        for key in ["total", "success", "failed", "running", "other"]:
+            grand_total[key] += daily_total[key]
         
-        # 添加每日统计
-        for day in daily_stats:
-            if "error" in day:
-                result.append(f"\n{day['date']}: {day['error']}")
-            else:
-                result.extend([
-                    f"\n{day['date']}:",
-                    f"  Total: {day['total']} | Success: {day['success']} | Failed: {day['failed']} | Running: {day['running']} | Other: {day['other']}"
-                ])
+        daily_summaries.append(daily_total)
+    
+    # 生成报告
+    result = [
+        "Airflow DAGs Execution Report",
+        f"Period: {start_date} to {(parsed_date + timedelta(days=days-1)).strftime('%Y-%m-%d')}",
+        "=" * 50,
+        "\nOverall Statistics:",
+        f"计划执行任务数: {grand_total['total']}",
+        f"实际执行任务数: {grand_total['total']}",  # 在这个实现中两者相同
+        f"成功任务数: {grand_total['success']}",
+        f"失败任务数: {grand_total['failed']}",
+        f"运行中任务数: {grand_total['running']}",
+        f"其他状态任务数: {grand_total['other']}",
+        "\nDaily Breakdown:",
+        "-" * 50
+    ]
+    
+    # 添加每日统计
+    for day in daily_summaries:
+        result.extend([
+            f"\n{day['date']}:",
+            f"总计: {day['total']} | 成功: {day['success']} | 失败: {day['failed']} | 运行中: {day['running']} | 其他: {day['other']}"
+        ])
         
-        # 添加失败任务分析
-        if total_stats["failed_tasks"]:
+        # 添加每个DAG的详细信息
+        for dag_id, stats in day["by_dag"].items():
+            if stats["total"] > 0:  # 只显示有运行记录的DAG
+                result.append(f"  {dag_id}: 总数={stats['total']}, 成功={stats['success']}, 失败={stats['failed']}, 运行中={stats['running']}, 其他={stats['other']}")
+    
+    # 添加失败任务分析
+    if grand_total["failed_tasks"]:
+        result.extend([
+            "\n失败任务分析:",
+            "=" * 50
+        ])
+        
+        for task in grand_total["failed_tasks"]:
             result.extend([
-                "\nFailure Analysis:",
-                "=" * 50
+                f"\n日期: {task['date']}",
+                f"DAG ID: {task['dag_id']}",
+                f"运行ID: {task['run_id']}",
+                f"错误类型: {task['analysis']['error_type']}",
+                f"错误信息: {task['analysis']['error_message']}",
+                "\n建议操作:",
+                *[f"- {s}" for s in task['analysis']['suggestions']],
+                "-" * 40
             ])
-            
-            for task in total_stats["failed_tasks"]:
-                result.extend([
-                    f"\nDate: {task['date']}",
-                    f"Run ID: {task['run_id']}",
-                    f"Error Type: {task['analysis']['error_type']}",
-                    f"Error Message: {task['analysis']['error_message']}",
-                    "\nRecommended Actions:",
-                    *[f"- {s}" for s in task['analysis']['suggestions']],
-                    "-" * 40
-                ])
 
     return "\n".join(result)
 
