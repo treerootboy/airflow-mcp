@@ -521,51 +521,77 @@ async def get_daily_report(
             date_start = current_date.strftime("%Y-%m-%dT00:00:00+00:00")
             date_end = current_date.strftime("%Y-%m-%dT23:59:59+00:00")
             
-            # 获取当天运行记录
-            params = {
-                "execution_date_gte": date_start,
-                "execution_date_lte": date_end,
-                "limit": 100,
-                "order_by": "-start_date"
-            }
+            # 使用get_dag_status获取当天的运行记录
+            status_data = await get_dag_status(
+                dag_id,
+                limit=100,
+                execution_date_gte=date_start,
+                execution_date_lte=date_end,
+                order_by="-start_date"
+            )
             
-            url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
-            query_string = urlencode(params)
-            data = await make_airflow_request(f"{url}?{query_string}")
-            
-            if not data or "dag_runs" not in data:
+            # 如果获取失败
+            if "Unable to fetch status" in status_data:
                 daily_stats.append({
                     "date": current_date.strftime("%Y-%m-%d"),
                     "error": "Unable to fetch data"
                 })
                 continue
+                
+            # 解析get_dag_status返回的字符串
+            runs_data = status_data.split("\n")
+            total_runs = 0
+            success_runs = 0
+            failed_runs = 0
+            running_runs = 0
             
-            # 处理当天数据
-            runs = data["dag_runs"]
+            # 分析运行状态
+            for line in runs_data:
+                if "State: " in line:
+                    state = line.split("State: ")[1].strip()
+                    total_runs += 1
+                    if state == "success":
+                        success_runs += 1
+                    elif state == "failed":
+                        failed_runs += 1
+                    elif state == "running":
+                        running_runs += 1
+            
             day_stats = {
                 "date": current_date.strftime("%Y-%m-%d"),
-                "total": len(runs),
-                "success": len([r for r in runs if r["state"] == "success"]),
-                "failed": len([r for r in runs if r["state"] == "failed"]),
-                "running": len([r for r in runs if r["state"] == "running"]),
-                "other": len([r for r in runs if r["state"] not in ["success", "failed", "running"]])
+                "total": total_runs,
+                "success": success_runs,
+                "failed": failed_runs,
+                "running": running_runs,
+                "other": total_runs - (success_runs + failed_runs + running_runs)
             }
             
             # 更新总体统计
             for key in ["total", "success", "failed", "running", "other"]:
                 total_stats[key] += day_stats[key]
             
-            # 分析失败的运行
-            failed_runs = [r for r in runs if r["state"] == "failed"]
-            for run in failed_runs:
-                # 获取失败任务的日志
-                logs = await get_dag_logs(dag_id, run["dag_run_id"])
-                analysis = analyze_logs(logs)
-                total_stats["failed_tasks"].append({
-                    "date": current_date.strftime("%Y-%m-%d"),
-                    "run_id": run["dag_run_id"],
-                    "analysis": analysis
-                })
+            # 获取当天的失败运行记录
+            failed_status = await get_dag_status(
+                dag_id,
+                limit=100,
+                execution_date_gte=date_start,
+                execution_date_lte=date_end,
+                order_by="-start_date",
+                state="failed"
+            )
+            
+            # 提取失败运行的ID
+            for line in failed_status.split("\n"):
+                if line.startswith("Run ID: "):
+                    run_id = line.split("Run ID: ")[1].strip()
+                    # 获取失败任务的日志
+                    logs = await get_dag_logs(dag_id, run_id)
+                    analysis = analyze_logs(logs)
+                    total_stats["failed_tasks"].append({
+                        "date": current_date.strftime("%Y-%m-%d"),
+                        "run_id": run_id,
+                        "analysis": analysis
+                    })
             
             daily_stats.append(day_stats)
         
