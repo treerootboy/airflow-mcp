@@ -1,0 +1,13 @@
+{
+    "mcpServers": {
+      "airflow": {
+        "command": "uv",
+        "args": [
+          "--directory",
+          "/Users/ming/AI/airflow-mcp",
+          "run",
+          "airflow_mcp.py"
+        ]
+      }
+    }
+  }
