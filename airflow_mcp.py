@@ -196,6 +196,53 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="list-dag-runs",
+            description="Get DAG runs in batch",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dag_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of DAG IDs to query",
+                        "required": False
+                    },
+                    "execution_date_gte": {
+                        "type": "string",
+                        "description": "Minimum execution date",
+                        "required": False,
+                    },
+                    "execution_date_lte": {
+                        "type": "string",
+                        "description": "Maximum execution date",
+                        "required": False,
+                    },
+                    "states": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of states to filter",
+                        "required": False
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of records to return per DAG",
+                        "default": 100,
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Number of records to skip",
+                        "default": 0,
+                    },
+                    "order_by": {
+                        "type": "string",
+                        "description": "Field to order by (e.g. -start_date, start_date)",
+                        "default": "-start_date",
+                    }
+                },
+                "required": [],
+            },
+        ),
+        types.Tool(
             name="get-dag-status",
             description="Get the status of a specific DAG's runs",
             inputSchema={
@@ -256,6 +303,19 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["dag_id", "run_id"],
+            },
+        ),
+        types.Tool(  # 新增的回填工具
+            name="backfill-dag",
+            description="Backfill a DAG for a specified date range",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dag_id": {"type": "string"},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                },
+                "required": ["dag_id", "start_date", "end_date"],
             },
         ),
     ]
@@ -325,7 +385,7 @@ async def handle_call_tool(
         conf = arguments.get("conf")
         url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
         data = await make_airflow_request(url, method="POST", json={"conf": conf or {}})
-        
+
         if not data:
             raise ValueError(f"Failed to trigger DAG {dag_id}.")
 
@@ -347,7 +407,7 @@ State: {data["state"]}
 
         url = f"{AIRFLOW_API_BASE}/dags/{dag_id}"
         data = await make_airflow_request(url, method="PATCH", json={"is_paused": False})
-        
+
         if not data:
             raise ValueError(f"Failed to enable DAG {dag_id}.")
 
@@ -369,19 +429,127 @@ State: {data["state"]}
             )
         ]
 
+    if name == "list-dag-runs":
+        dag_ids = arguments.get("dag_ids")
+        execution_date_gte = arguments.get("execution_date_gte")
+        execution_date_lte = arguments.get("execution_date_lte")
+        states = arguments.get("states")
+        limit = arguments.get("limit", 100)
+        offset = arguments.get("offset", 0)
+        order_by = arguments.get("order_by", "-start_date")
+
+        data = await get_dag_runs_batch(
+            dag_ids=dag_ids,
+            execution_date_gte=execution_date_gte,
+            execution_date_lte=execution_date_lte,
+            states=states,
+            limit=limit,
+            offset=offset,
+            order_by=order_by
+        )
+
+        if not data or "dag_runs" not in data:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="Unable to fetch DAG runs"
+                )
+            ]
+
+        result = [
+            f"Total DAG Runs: {data['total_entries']}",
+            "=" * 40
+        ]
+
+        for run in data["dag_runs"]:
+            result.extend([
+                f"\nDAG ID: {run['dag_id']}",
+                f"Run ID: {run['dag_run_id']}",
+                f"State: {run['state']}",
+                f"Start Date: {run['start_date']}",
+                f"End Date: {run['end_date'] or 'N/A'}",
+                "-" * 40
+            ])
+
+        return [
+            types.TextContent(
+                type="text",
+                text="\n".join(result)
+            )
+        ]
+
+    if name == "backfill-dag":  # 新增的回填工具处理逻辑
+        dag_id = arguments.get("dag_id")
+        start_date = arguments.get("start_date")
+        end_date = arguments.get("end_date")
+        if not dag_id or not start_date or not end_date:
+            raise ValueError("Missing dag_id, start_date, or end_date")
+
+        url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
+        data = await make_airflow_request(url, method="POST", json={
+            "conf": {},
+            "run_id": f"manual__{datetime.utcnow().isoformat()}",
+            "execution_date": start_date,
+            "end_date": end_date,
+        })
+
+        if not data:
+            raise ValueError(f"Failed to backfill DAG {dag_id}.")
+
+        return [
+            types.TextContent(
+                type="text",
+                text=f"""
+Successfully backfilled DAG {dag_id}
+Run ID: {data["dag_run_id"]}
+State: {data["state"]}
+"""
+            )
+        ]
+
     raise ValueError(f"Unknown tool: {name}")
+
+async def get_dag_runs_batch(
+    dag_ids: list[str] | None = None,
+    execution_date_gte: str | None = None,
+    execution_date_lte: str | None = None,
+    states: list[str] | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    order_by: str = "-start_date"
+) -> dict:
+    """批量获取DAG运行状态。"""
+    url = f"{AIRFLOW_API_BASE}/dags/~/dagRuns/list"
+
+    # 构建请求体
+    request_body = {
+        "dag_ids": dag_ids,
+        "page_offset": offset,
+        "page_limit": limit,
+        "order_by": order_by
+    }
+
+    if execution_date_gte:
+        request_body["execution_date_gte"] = execution_date_gte
+    if execution_date_lte:
+        request_body["execution_date_lte"] = execution_date_lte
+    if states:
+        request_body["states"] = states
+
+    data = await make_airflow_request(url, method="POST", json=request_body)
+    return data or {"total_entries": 0, "dag_runs": []}
 
 async def list_dags() -> str:
     """List all available DAGs."""
     url = f"{AIRFLOW_API_BASE}/dags"
     data = await make_airflow_request(url)
-    
+
     if not data or "dags" not in data:
         return "Unable to fetch DAGs."
-    
+
     if not data["dags"]:
         return "No DAGs found."
-    
+
     dags = [dag["dag_id"] for dag in data["dags"]]
     return "\n".join(dags)
 
@@ -400,28 +568,28 @@ async def get_dag_status(
         "offset": offset,
         "order_by": order_by
     }
-    
+
     if execution_date_gte:
         params["execution_date_gte"] = execution_date_gte
     if execution_date_lte:
         params["execution_date_lte"] = execution_date_lte
     if state:
         params["state"] = state
-    
+
     query_params = "&".join([f"{k}={v}" for k, v in params.items()])
     url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns?{query_params}"
     data = await make_airflow_request(url)
-    
+
     if not data or "dag_runs" not in data:
         return f"Unable to fetch status for DAG {dag_id}."
-    
+
     if not data["dag_runs"]:
         return f"No runs found for DAG {dag_id}."
-    
+
     result = [f"DAG: {dag_id}"]
     result.append(f"Total Runs: {len(data['dag_runs'])}")
     result.append("-" * 40)
-    
+
     for run in data["dag_runs"]:
         result.extend([
             f"Run ID: {run['dag_run_id']}",
@@ -430,7 +598,7 @@ async def get_dag_status(
             f"End Date: {run['end_date'] or 'N/A'}",
             "-" * 40
         ])
-    
+
     return "\n".join(result)
 
 async def get_dag_logs(
@@ -442,40 +610,40 @@ async def get_dag_logs(
     """Get logs for a DAG run."""
     url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns/{run_id}/taskInstances"
     data = await make_airflow_request(url)
-    
+
     if not data or "task_instances" not in data:
         return f"Unable to fetch task instances for DAG {dag_id} run {run_id}."
-    
+
     if not data["task_instances"]:
         return f"No task instances found for DAG {dag_id} run {run_id}."
-    
+
     result = []
     tasks = data["task_instances"]
-    
+
     if task_id:
         tasks = [task for task in tasks if task["task_id"] == task_id]
         if not tasks:
             return f"Task {task_id} not found in DAG {dag_id} run {run_id}."
-    
+
     for task in tasks:
         task_id = task["task_id"]
         attempt = try_number if try_number is not None else task["try_number"]
         if attempt < 1:
             attempt = 1
-        
+
         log_url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns/{run_id}/taskInstances/{task_id}/logs/{attempt}"
         response = await make_airflow_request(log_url)
-        
+
         if not response or "content" not in response:
             result.append(f"Unable to fetch logs for task {task_id} attempt {attempt}")
             continue
-        
+
         result.extend([
             f"=== Logs for task: {task_id} (attempt {attempt}) ===",
             response["content"],
             "=" * 50
         ])
-    
+
     return "\n".join(result) if result else "No logs found."
 
 async def get_daily_report(
@@ -488,22 +656,22 @@ async def get_daily_report(
 
     if not start_date:
         start_date = datetime.utcnow().strftime("%Y-%m-%d")
-    
+
     from datetime import timedelta
-    
+
     try:
         # 解析起始日期
         parsed_date = datetime.strptime(start_date, "%Y-%m-%d")
     except ValueError:
         return f"Invalid date format: {start_date}. Please use YYYY-MM-DD format."
-    
+
     # 获取所有DAG列表
     dags_data = await list_dags()
     if "Unable to fetch DAGs" in dags_data:
         return "Unable to fetch DAGs list"
-    
+
     dag_ids = dags_data.split("\n")
-    
+
     # 初始化总体统计
     grand_total = {
         "total": 0,
@@ -513,7 +681,7 @@ async def get_daily_report(
         "other": 0,
         "failed_tasks": []
     }
-    
+
     # 按天统计数据
     daily_summaries = []
     for day in range(days):
@@ -521,7 +689,7 @@ async def get_daily_report(
         date_str = current_date.strftime("%Y-%m-%d")
         date_start = current_date.strftime("%Y-%m-%dT00:00:00+00:00")
         date_end = current_date.strftime("%Y-%m-%dT23:59:59+00:00")
-        
+
         daily_total = {
             "date": date_str,
             "total": 0,
@@ -531,22 +699,22 @@ async def get_daily_report(
             "other": 0,
             "by_dag": {}
         }
-        
-        # 收集每个DAG的数据
+
+        # 使用 get_dag_runs_batch 获取当天所有DAG的运行记录
+        dag_run_data = await get_dag_runs_batch(
+            dag_ids=dag_ids,
+            execution_date_gte=date_start,
+            execution_date_lte=date_end,
+            states=["success", "failed", "running"],
+            limit=100,
+            order_by="-start_date"
+        )
+
+        # 初始化每个DAG的统计
         for dag_id in dag_ids:
             if not dag_id:  # 跳过空行
                 continue
-                
-            # 获取当天的运行记录
-            status_data = await get_dag_status(
-                dag_id,
-                limit=100,
-                execution_date_gte=date_start,
-                execution_date_lte=date_end,
-                order_by="-start_date"
-            )
-            
-            # 初始化该DAG的统计
+
             dag_stats = {
                 "total": 0,
                 "success": 0,
@@ -554,12 +722,11 @@ async def get_daily_report(
                 "running": 0,
                 "other": 0
             }
-            
-            if "Unable to fetch status" not in status_data:
-                # 分析运行状态
-                for line in status_data.split("\n"):
-                    if "State: " in line:
-                        state = line.split("State: ")[1].strip()
+
+            if dag_run_data and "dag_runs" in dag_run_data:
+                for run in dag_run_data["dag_runs"]:
+                    if run["dag_id"] == dag_id:
+                        state = run["state"]
                         dag_stats["total"] += 1
                         if state == "success":
                             dag_stats["success"] += 1
@@ -569,41 +736,29 @@ async def get_daily_report(
                             dag_stats["running"] += 1
                         else:
                             dag_stats["other"] += 1
-                
-                # 如果有失败的任务，获取详细信息
-                if dag_stats["failed"] > 0:
-                    failed_status = await get_dag_status(
-                        dag_id,
-                        limit=100,
-                        execution_date_gte=date_start,
-                        execution_date_lte=date_end,
-                        order_by="-start_date",
-                        state="failed"
-                    )
-                    
-                    for line in failed_status.split("\n"):
-                        if line.startswith("Run ID: "):
-                            run_id = line.split("Run ID: ")[1].strip()
-                            logs = await get_dag_logs(dag_id, run_id)
+
+                        # 如果有失败的任务，获取详细信息
+                        if state == "failed":
+                            logs = await get_dag_logs(dag_id, run["dag_run_id"])
                             analysis = analyze_logs(logs)
                             grand_total["failed_tasks"].append({
                                 "date": date_str,
                                 "dag_id": dag_id,
-                                "run_id": run_id,
+                                "run_id": run["dag_run_id"],
                                 "analysis": analysis
                             })
-            
+
             # 更新日统计
             daily_total["by_dag"][dag_id] = dag_stats
             for key in ["total", "success", "failed", "running", "other"]:
                 daily_total[key] += dag_stats[key]
-        
+
         # 更新总体统计
         for key in ["total", "success", "failed", "running", "other"]:
             grand_total[key] += daily_total[key]
-        
+
         daily_summaries.append(daily_total)
-    
+
     # 生成报告
     result = [
         "Airflow DAGs Execution Report",
@@ -619,26 +774,26 @@ async def get_daily_report(
         "\nDaily Breakdown:",
         "-" * 50
     ]
-    
+
     # 添加每日统计
     for day in daily_summaries:
         result.extend([
             f"\n{day['date']}:",
             f"总计: {day['total']} | 成功: {day['success']} | 失败: {day['failed']} | 运行中: {day['running']} | 其他: {day['other']}"
         ])
-        
+
         # 添加每个DAG的详细信息
         for dag_id, stats in day["by_dag"].items():
             if stats["total"] > 0:  # 只显示有运行记录的DAG
                 result.append(f"  {dag_id}: 总数={stats['total']}, 成功={stats['success']}, 失败={stats['failed']}, 运行中={stats['running']}, 其他={stats['other']}")
-    
+
     # 添加失败任务分析
     if grand_total["failed_tasks"]:
         result.extend([
             "\n失败任务分析:",
             "=" * 50
         ])
-        
+
         for task in grand_total["failed_tasks"]:
             result.extend([
                 f"\n日期: {task['date']}",
