@@ -7,7 +7,7 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from pydantic import AnyUrl
 import mcp.server.stdio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Initialize server
 server = Server("airflow")
@@ -209,12 +209,12 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "execution_date_gte": {
                         "type": "string",
-                        "description": "Minimum execution date",
+                        "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai",
                         "required": False,
                     },
                     "execution_date_lte": {
                         "type": "string",
-                        "description": "Maximum execution date",
+                        "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai",
                         "required": False,
                     },
                     "states": {
@@ -266,12 +266,12 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                     "execution_date_gte": {
                         "type": "string",
-                        "description": "Minimum execution date",
+                        "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai",
                         "required": False,
                     },
                     "execution_date_lte": {
                         "type": "string",
-                        "description": "Maximum execution date",
+                        "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai",
                         "required": False,
                     },
                     "state": {
@@ -312,8 +312,8 @@ async def handle_list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {
                     "dag_id": {"type": "string"},
-                    "start_date": {"type": "string"},
-                    "end_date": {"type": "string"},
+                    "start_date": {"type": "string", "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai"},
+                    "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai"},
                 },
                 "required": ["dag_id", "start_date", "end_date"],
             },
@@ -479,32 +479,43 @@ State: {data["state"]}
         ]
 
     if name == "backfill-dag":  # 新增的回填工具处理逻辑
+        
         dag_id = arguments.get("dag_id")
         start_date = arguments.get("start_date")
         end_date = arguments.get("end_date")
         if not dag_id or not start_date or not end_date:
             raise ValueError("Missing dag_id, start_date, or end_date")
+        
+        # 根据开始和结束日期生成日期范围数组, 兼容多种日期格式
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+            date_range = [start + timedelta(days=d) for d in range((end - start).days + 1)]
+        except ValueError:
+            raise ValueError("Invalid date format. Please use YYYY-MM-DD format.")
+        
+        logs = []
+        for date in date_range:
+            url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
+            data = await make_airflow_request(url, method="POST", json={
+                "conf": {},
+                "dag_run_id": f"manual__{date.isoformat()}",
+                "logical_date": date.isoformat()
+            })
+            
 
-        url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
-        data = await make_airflow_request(url, method="POST", json={
-            "conf": {},
-            "run_id": f"manual__{datetime.utcnow().isoformat()}",
-            "execution_date": start_date,
-            "end_date": end_date,
-        })
-
-        if not data:
-            raise ValueError(f"Failed to backfill DAG {dag_id}.")
-
+            # 记录回填结果
+            logs.append(data)
+       
         return [
             types.TextContent(
                 type="text",
                 text=f"""
 Successfully backfilled DAG {dag_id}
-Run ID: {data["dag_run_id"]}
-State: {data["state"]}
+Run ID: {log["dag_run_id"]}
+State: {log["state"]}
 """
-            )
+            ) for log in logs
         ]
 
     raise ValueError(f"Unknown tool: {name}")
