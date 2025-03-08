@@ -92,7 +92,7 @@ async def make_airflow_request(url: str, method: str = "GET", json: dict = None)
             )
             response.raise_for_status()
             return response.json()
-        except Exception:
+        except Exception as e:
             return None
 
 @server.list_prompts()
@@ -479,46 +479,59 @@ State: {data["state"]}
         ]
 
     if name == "backfill-dag":  # 新增的回填工具处理逻辑
-        
         dag_id = arguments.get("dag_id")
         start_date = arguments.get("start_date")
         end_date = arguments.get("end_date")
-        if not dag_id or not start_date or not end_date:
-            raise ValueError("Missing dag_id, start_date, or end_date")
         
-        # 根据开始和结束日期生成日期范围数组, 兼容多种日期格式
-        try:
-            start = datetime.strptime(start_date, "%Y-%m-%d")
-            end = datetime.strptime(end_date, "%Y-%m-%d")
-            date_range = [start + timedelta(days=d) for d in range((end - start).days + 1)]
-        except ValueError:
-            raise ValueError("Invalid date format. Please use YYYY-MM-DD format.")
-        
-        logs = []
-        for date in date_range:
-            url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
-            data = await make_airflow_request(url, method="POST", json={
-                "conf": {},
-                "dag_run_id": f"manual__{date.isoformat()}",
-                "logical_date": date.isoformat()
-            })
-            
-
-            # 记录回填结果
-            logs.append(data)
-       
+        result = await backfill_dag(dag_id, start_date, end_date)
         return [
             types.TextContent(
                 type="text",
                 text=f"""
-Successfully backfilled DAG {dag_id}
-Run ID: {log["dag_run_id"]}
-State: {log["state"]}
-"""
-            ) for log in logs
+    Successfully backfilled DAG {dag_id}
+    Run ID: {log["dag_run_id"]}
+    State: {log["state"]}
+    """
+            ) for log in result
         ]
 
     raise ValueError(f"Unknown tool: {name}")
+
+async def backfill_dag(dag_id: str, start_date: str, end_date: str) -> list[dict]:
+    """执行DAG的回填操作。"""
+    if not dag_id or not start_date or not end_date:
+        raise ValueError("Missing dag_id, start_date, or end_date")
+
+    # 根据开始和结束日期生成日期范围数组, 兼容多种日期格式
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        date_range = [start + timedelta(days=d) for d in range((end - start).days + 1)]
+    except ValueError:
+        raise ValueError("Invalid date format. Please use YYYY-MM-DD format.")
+    
+    logs = []
+    for date in date_range:
+        url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
+        param = {
+            "conf": {},
+            "dag_run_id": f"manual__{dag_id}_{date.isoformat()}Z",
+            "logical_date": date.isoformat()+'Z'
+        }
+        data = await make_airflow_request(url, method="POST", json=param)
+        if not data:
+            data = {
+                "dag_run_id": param["dag_run_id"],
+                "state": "FAILED",
+                "logical_date": param["logical_date"]
+            }
+        logs.append({
+            "dag_run_id": data["dag_run_id"],
+            "state": data["state"],
+            "logical_date": data["logical_date"],
+        })
+
+    return logs
 
 async def get_dag_runs_batch(
     dag_ids: list[str] | None = None,
