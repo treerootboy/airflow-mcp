@@ -97,6 +97,7 @@ async def make_airflow_request(url: str, method: str = "GET", json: dict = None)
             response.raise_for_status()
             return response.json()
         except Exception as e:
+            raise ValueError(f"url: {url}, method: {method}, headers: {HEADERS}, auth: {AUTH}, json: {json}, error: {e}")
             return None
 
 @server.list_prompts()
@@ -208,7 +209,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     "dag_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of DAG IDs to query",
+                        "description": "List of DAG IDs to query, if None get all dags from list-dag-runs tool",
                         "required": False
                     },
                     "execution_date_gte": {
@@ -565,7 +566,7 @@ async def get_dag_runs_batch(
         request_body["states"] = states
 
     data = await make_airflow_request(url, method="POST", json=request_body)
-    return data or {"total_entries": 0, "dag_runs": []}
+    return data
 
 async def list_dags() -> str:
     """List all available DAGs."""
@@ -736,52 +737,71 @@ async def get_daily_report(
             order_by="-start_date"
         )
 
-        # 初始化每个DAG的统计
-        for dag_id in dag_ids:
-            if not dag_id:  # 跳过空行
-                continue
-
-            dag_stats = {
-                "total": 0,
-                "success": 0,
-                "failed": 0,
-                "running": 0,
-                "other": 0
-            }
-
-            if dag_run_data and "dag_runs" in dag_run_data:
-                for run in dag_run_data["dag_runs"]:
-                    if run["dag_id"] == dag_id:
-                        state = run["state"]
-                        dag_stats["total"] += 1
-                        if state == "success":
-                            dag_stats["success"] += 1
-                        elif state == "failed":
-                            dag_stats["failed"] += 1
-                        elif state == "running":
-                            dag_stats["running"] += 1
-                        else:
-                            dag_stats["other"] += 1
-
-                        # 如果有失败的任务，获取详细信息
-                        if state == "failed":
-                            logs = await get_dag_logs(dag_id, run["dag_run_id"])
-                            analysis = analyze_logs(logs)
-                            grand_total["failed_tasks"].append({
-                                "date": date_str,
-                                "dag_id": dag_id,
-                                "run_id": run["dag_run_id"],
-                                "analysis": analysis
-                            })
-
-            # 更新日统计
-            daily_total["by_dag"][dag_id] = dag_stats
-            for key in ["total", "success", "failed", "running", "other"]:
-                daily_total[key] += dag_stats[key]
-
-        # 更新总体统计
-        for key in ["total", "success", "failed", "running", "other"]:
-            grand_total[key] += daily_total[key]
+        # Process the DAG runs
+        for run in dag_run_data.get("dag_runs", []):
+            dag_id = run.get("dag_id", "unknown")
+            state = run.get("state", "unknown").lower()  # Convert to lowercase for consistency
+            
+            # Initialize DAG stats if not exists
+            if dag_id not in daily_total["by_dag"]:
+                daily_total["by_dag"][dag_id] = {
+                    "total": 0,
+                    "success": 0,
+                    "failed": 0,
+                    "running": 0,
+                    "queued": 0,
+                    "other": 0
+                }
+            
+            # Update DAG specific stats
+            daily_total["by_dag"][dag_id]["total"] += 1
+            
+            # Update state counts based on the four valid states
+            if state == "success":
+                daily_total["by_dag"][dag_id]["success"] += 1
+                daily_total["success"] += 1
+                grand_total["success"] += 1
+                
+            elif state == "failed":
+                daily_total["by_dag"][dag_id]["failed"] += 1
+                daily_total["failed"] += 1
+                grand_total["failed"] += 1
+                
+                # For failed tasks, try to get logs and analyze
+                try:
+                    logs = await get_dag_logs(dag_id, run.get("dag_run_id", ""))
+                    analysis = analyze_logs(logs)
+                    grand_total["failed_tasks"].append({
+                    "date": date_str,
+                    "dag_id": dag_id,
+                    "run_id": run.get("dag_run_id", ""),
+                    "analysis": analysis
+                    })
+                except Exception:
+                    pass
+                
+            elif state == "running":
+                daily_total["by_dag"][dag_id]["running"] += 1
+                daily_total["running"] += 1
+                grand_total["running"] += 1
+                
+            elif state == "queued":
+                # Add handling for queued state
+                if "queued" not in daily_total:
+                    daily_total["queued"] = 0
+                if "queued" not in grand_total:
+                    grand_total["queued"] = 0
+                    daily_total["by_dag"][dag_id]["queued"] += 1
+                    daily_total["queued"] += 1
+                    grand_total["queued"] += 1
+                else:
+                    daily_total["by_dag"][dag_id]["other"] += 1
+                    daily_total["other"] += 1
+                    grand_total["other"] += 1
+            
+            # Update totals
+            daily_total["total"] += 1
+            grand_total["total"] += 1
 
         daily_summaries.append(daily_total)
 
@@ -813,24 +833,24 @@ async def get_daily_report(
             if stats["total"] > 0:  # 只显示有运行记录的DAG
                 result.append(f"  {dag_id}: 总数={stats['total']}, 成功={stats['success']}, 失败={stats['failed']}, 运行中={stats['running']}, 其他={stats['other']}")
 
-    # 添加失败任务分析
-    if grand_total["failed_tasks"]:
-        result.extend([
-            "\n失败任务分析:",
-            "=" * 50
-        ])
+    # # 添加失败任务分析
+    # if grand_total["failed_tasks"]:
+    #     result.extend([
+    #         "\n失败任务分析:",
+    #         "=" * 50
+    #     ])
 
-        for task in grand_total["failed_tasks"]:
-            result.extend([
-                f"\n日期: {task['date']}",
-                f"DAG ID: {task['dag_id']}",
-                f"运行ID: {task['run_id']}",
-                f"错误类型: {task['analysis']['error_type']}",
-                f"错误信息: {task['analysis']['error_message']}",
-                "\n建议操作:",
-                *[f"- {s}" for s in task['analysis']['suggestions']],
-                "-" * 40
-            ])
+    #     for task in grand_total["failed_tasks"]:
+    #         result.extend([
+    #             f"\n日期: {task['date']}",
+    #             f"DAG ID: {task['dag_id']}",
+    #             f"运行ID: {task['run_id']}",
+    #             f"错误类型: {task['analysis']['error_type']}",
+    #             f"错误信息: {task['analysis']['error_message']}",
+    #             "\n建议操作:",
+    #             *[f"- {s}" for s in task['analysis']['suggestions']],
+    #             "-" * 40
+    #         ])
 
     return "\n".join(result)
 
