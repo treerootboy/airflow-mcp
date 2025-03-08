@@ -8,13 +8,17 @@ from mcp.server import NotificationOptions, Server
 from pydantic import AnyUrl
 import mcp.server.stdio
 from datetime import datetime, timedelta
+import os
 
 # Initialize server
 server = Server("airflow")
 
 # Constants
-AIRFLOW_API_BASE = "http://localhost:8080/api/v1"
-AUTH = ("admin", "admin")
+AIRFLOW_API_BASE = os.environ.get("AIRFLOW_API_BASE", "http://localhost:8080/api/v1")
+AUTH = (
+    os.environ.get("AIRFLOW_USERNAME", "admin"), 
+    os.environ.get("AIRFLOW_PASSWORD", "admin")
+)
 HEADERS = {
     "Accept": "application/json"
 }
@@ -680,9 +684,7 @@ async def get_daily_report(
 
     if not start_date:
         start_date = datetime.utcnow().strftime("%Y-%m-%d")
-
-    from datetime import timedelta
-
+        
     try:
         # 解析起始日期
         parsed_date = datetime.strptime(start_date, "%Y-%m-%d")
