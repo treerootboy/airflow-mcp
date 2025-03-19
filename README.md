@@ -13,7 +13,21 @@
 - **获取 DAG 日志 (`get-dag-logs`)**: 获取 DAG 运行的日志。
 - **回填 DAG (`backfill-dag`)**: 回填指定日期范围内的 DAG 数据。
 
-## 安装与使用
+## 使用
+```json
+{
+  "mcpServers": {
+    "airflow": {
+      "command": "uvx",
+      "args": [
+        "airflow_mcp"
+      ]
+    }
+  }
+}
+```
+
+## 开发
 1. uv sync
 2. 修改 mcp_config.json, 加入 airflow 配置
 ```json
@@ -23,7 +37,7 @@
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/ming/AI/airflow-mcp",
+        "/path/to/airflow-mcp",
         "run",
         "airflow_mcp.py"
       ]
