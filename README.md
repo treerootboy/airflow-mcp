@@ -20,7 +20,7 @@
     "airflow": {
       "command": "uvx",
       "args": [
-        "airflow_mcp"
+        "airflow-mcp"
       ]
     }
   }
