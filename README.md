@@ -21,7 +21,12 @@
       "command": "uvx",
       "args": [
         "airflow-mcp"
-      ]
+      ],
+      "env": {
+        "AIRFLOW_API_BASE": "http://localhost:8000/api/v1",
+        "AIRFLOW_USERNAME": "admin",
+        "AIRFLOW_PASSWORD": "admin"
+      }
     }
   }
 }
@@ -40,7 +45,12 @@
         "/path/to/airflow-mcp",
         "run",
         "airflow_mcp.py"
-      ]
+      ],
+      "env": {
+        "AIRFLOW_API_BASE": "http://localhost:8000/api/v1",
+        "AIRFLOW_USERNAME": "admin",
+        "AIRFLOW_PASSWORD": "admin"
+      }
     }
   }
 }
