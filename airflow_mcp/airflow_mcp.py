@@ -336,38 +336,32 @@ async def handle_list_tools() -> list[types.Tool]:
                     "task_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional. List of task IDs to clear. If not specified, clear all tasks.",
-                        "required": False
+                        "description": "Optional. List of task IDs to clear. If not specified, clear all tasks."
                     },
                     "only_failed": {
                         "type": "boolean",
-                        "description": "If true, only clear failed task instances. Default: true",
-                        "default": True,
-                        "required": False
+                        "description": "If true, only clear failed task instances. Default: true. Note: only_failed and only_running cannot both be true.",
+                        "default": True
                     },
                     "only_running": {
                         "type": "boolean",
-                        "description": "If true, only clear running task instances. Default: false",
-                        "default": False,
-                        "required": False
+                        "description": "If true, only clear running task instances. Default: false. Note: only_failed and only_running cannot both be true.",
+                        "default": False
                     },
                     "include_subdags": {
                         "type": "boolean",
                         "description": "Whether to include subdags. Default: false",
-                        "default": False,
-                        "required": False
+                        "default": False
                     },
                     "include_parentdag": {
                         "type": "boolean",
                         "description": "Whether to include parent DAG. Default: false",
-                        "default": False,
-                        "required": False
+                        "default": False
                     },
                     "reset_dag_runs": {
                         "type": "boolean",
                         "description": "Whether to reset DAG run state to running. Default: true",
-                        "default": True,
-                        "required": False
+                        "default": True
                     }
                 },
                 "required": ["dag_id", "start_date", "end_date"],
@@ -603,20 +597,21 @@ async def clear_task_instances(
         include_parentdag: 是否包含父DAG
         reset_dag_runs: 是否重置DAG运行状态为运行中
     """
-    # 格式化日期为ISO 8601格式
     def format_date(date_str: str) -> str:
         """将日期字符串转换为ISO 8601格式"""
         try:
-            # 尝试解析YYYY-MM-DD格式
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError:
-            # 如果已经是ISO格式或其他格式，直接返回
-            return date_str
+            # 验证是否是有效的ISO格式
+            try:
+                datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return date_str
+            except (ValueError, AttributeError):
+                raise ValueError(f"Invalid date format: {date_str}. Please use YYYY-MM-DD or ISO 8601 format.")
     
     url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/clearTaskInstances"
     
-    # 构建请求体
     request_body = {
         "start_date": format_date(start_date),
         "end_date": format_date(end_date),
@@ -627,7 +622,6 @@ async def clear_task_instances(
         "reset_dag_runs": reset_dag_runs
     }
     
-    # 如果指定了任务ID列表，添加到请求体
     if task_ids:
         request_body["task_ids"] = task_ids
     
@@ -637,21 +631,33 @@ async def clear_task_instances(
         if not data:
             return f"Failed to clear task instances for DAG {dag_id}"
         
-        # 格式化返回结果
         result = [
             f"Successfully cleared task instances for DAG {dag_id}",
-            "=" * 50,
-            f"Total cleared: {len(data)} task instances"
+            "=" * 50
         ]
         
-        # 如果返回了任务实例详情，添加到结果中
+        # 处理返回数据，支持列表或字典格式
         if isinstance(data, list):
+            result.append(f"Total cleared: {len(data)} task instances")
             result.append("\nCleared task instances:")
             for task_instance in data:
                 if isinstance(task_instance, dict):
                     task_id = task_instance.get("task_id", "unknown")
                     execution_date = task_instance.get("execution_date", "unknown")
                     result.append(f"  - Task: {task_id}, Execution Date: {execution_date}")
+        elif isinstance(data, dict):
+            # 如果API返回的是字典格式，尝试获取相关信息
+            task_instances = data.get("task_instances", [])
+            result.append(f"Total cleared: {len(task_instances)} task instances")
+            if task_instances:
+                result.append("\nCleared task instances:")
+                for task_instance in task_instances:
+                    if isinstance(task_instance, dict):
+                        task_id = task_instance.get("task_id", "unknown")
+                        execution_date = task_instance.get("execution_date", "unknown")
+                        result.append(f"  - Task: {task_id}, Execution Date: {execution_date}")
+        else:
+            result.append("Task instances cleared successfully")
         
         return "\n".join(result)
         
