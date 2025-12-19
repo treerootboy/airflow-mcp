@@ -552,13 +552,20 @@ State: {log["state"]}
         if not dag_id or not start_date or not end_date:
             raise ValueError("Missing required parameters: dag_id, start_date, and end_date are required")
         
+        only_failed = arguments.get("only_failed", True)
+        only_running = arguments.get("only_running", False)
+        
+        # Validate mutual exclusivity
+        if only_failed and only_running:
+            raise ValueError("only_failed and only_running cannot both be true")
+        
         result = await clear_task_instances(
             dag_id=dag_id,
             start_date=start_date,
             end_date=end_date,
             task_ids=arguments.get("task_ids"),
-            only_failed=arguments.get("only_failed", True),
-            only_running=arguments.get("only_running", False),
+            only_failed=only_failed,
+            only_running=only_running,
             include_subdags=arguments.get("include_subdags", False),
             include_parentdag=arguments.get("include_parentdag", False),
             reset_dag_runs=arguments.get("reset_dag_runs", True)
@@ -584,26 +591,26 @@ async def clear_task_instances(
     include_parentdag: bool = False,
     reset_dag_runs: bool = True
 ) -> str:
-    """清除任务实例。
+    """Clear task instances for a DAG.
     
     Args:
-        dag_id: DAG的ID
-        start_date: 开始日期，格式为YYYY-MM-DD或ISO 8601格式
-        end_date: 结束日期，格式为YYYY-MM-DD或ISO 8601格式
-        task_ids: 可选的任务ID列表，如果指定则只清除这些任务
-        only_failed: 是否只清除失败的任务实例
-        only_running: 是否只清除运行中的任务实例
-        include_subdags: 是否包含子DAG
-        include_parentdag: 是否包含父DAG
-        reset_dag_runs: 是否重置DAG运行状态为运行中
+        dag_id: The DAG ID
+        start_date: Start date in YYYY-MM-DD or ISO 8601 format
+        end_date: End date in YYYY-MM-DD or ISO 8601 format
+        task_ids: Optional list of task IDs to clear. If not specified, clears all tasks
+        only_failed: If true, only clear failed task instances
+        only_running: If true, only clear running task instances
+        include_subdags: Whether to include subdags
+        include_parentdag: Whether to include parent DAG
+        reset_dag_runs: Whether to reset DAG run state to running
     """
     def format_date(date_str: str) -> str:
-        """将日期字符串转换为ISO 8601格式"""
+        """Convert date string to ISO 8601 format."""
         try:
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError:
-            # 验证是否是有效的ISO格式
+            # Validate if it's a valid ISO format
             try:
                 datetime.fromisoformat(date_str.replace('Z', '+00:00'))
                 return date_str
@@ -636,7 +643,7 @@ async def clear_task_instances(
             "=" * 50
         ]
         
-        # 处理返回数据，支持列表或字典格式
+        # Handle response data, supporting both list and dict formats
         if isinstance(data, list):
             result.append(f"Total cleared: {len(data)} task instances")
             result.append("\nCleared task instances:")
@@ -646,7 +653,7 @@ async def clear_task_instances(
                     execution_date = task_instance.get("execution_date", "unknown")
                     result.append(f"  - Task: {task_id}, Execution Date: {execution_date}")
         elif isinstance(data, dict):
-            # 如果API返回的是字典格式，尝试获取相关信息
+            # If API returns dict format, try to get relevant information
             task_instances = data.get("task_instances", [])
             result.append(f"Total cleared: {len(task_instances)} task instances")
             if task_instances:
