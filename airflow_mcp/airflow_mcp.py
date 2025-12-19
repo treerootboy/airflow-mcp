@@ -319,7 +319,7 @@ async def handle_list_tools() -> list[types.Tool]:
                     "dag_id": {"type": "string"},
                     "start_date": {"type": "string", "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai"},
                     "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai"},
-                    "task_id": {"type": "string", "description": "Optional. Task ID to backfill. If not specified, backfill the entire DAG.", "required": False},
+                    "task_id": {"type": "string", "description": "Optional. Task ID to backfill. If not specified, backfill the entire DAG."},
                 },
                 "required": ["dag_id", "start_date", "end_date"],
             },
@@ -494,11 +494,10 @@ State: {data["state"]}
         return [
             types.TextContent(
                 type="text",
-                text=f"""
-    Successfully backfilled DAG {dag_id}
-    Run ID: {log["dag_run_id"]}
-    State: {log["state"]}
-    """
+                text=f"""Successfully backfilled DAG {dag_id}
+Run ID: {log["dag_run_id"]}
+State: {log["state"]}
+"""
             ) for log in result
         ]
 
