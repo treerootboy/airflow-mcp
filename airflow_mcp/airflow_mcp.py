@@ -153,7 +153,7 @@ async def handle_list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {
                     "dag_id": {"type": "string"},
-                    "conf": {"type": "object", "required": False},
+                    "conf": {"type": "object"},
                 },
                 "required": ["dag_id"],
             },
@@ -177,15 +177,13 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {
                     "start_date": {
                         "type": "string",
-                        "description": "Start date in YYYY-MM-DD format (default: today)",
-                        "required": False
+                        "description": "Start date in YYYY-MM-DD format (default: today)"
                     },
                     "days": {
                         "type": "integer",
                         "description": "Number of days to include (default: 1, max: 30)",
                         "minimum": 1,
-                        "maximum": 30,
-                        "required": False
+                        "maximum": 30
                     }
                 },
                 "required": []
@@ -209,42 +207,38 @@ async def handle_list_tools() -> list[types.Tool]:
                     "dag_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of DAG IDs to query, if None get all dags from list-dag-runs tool",
-                        "required": False
+                        "description": "List of DAG IDs to query, if None get all dags from list-dag-runs tool"
                     },
                     "execution_date_gte": {
                         "type": "string",
-                        "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai",
-                        "required": False,
+                        "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai"
                     },
                     "execution_date_lte": {
                         "type": "string",
-                        "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai",
-                        "required": False,
+                        "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai"
                     },
                     "states": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of states to filter",
-                        "required": False
+                        "description": "List of states to filter"
                     },
                     "limit": {
                         "type": "integer",
                         "description": "Maximum number of records to return per DAG",
-                        "default": 100,
+                        "default": 100
                     },
                     "offset": {
                         "type": "integer",
                         "description": "Number of records to skip",
-                        "default": 0,
+                        "default": 0
                     },
                     "order_by": {
                         "type": "string",
                         "description": "Field to order by (e.g. -start_date, start_date)",
-                        "default": "-start_date",
+                        "default": "-start_date"
                     }
                 },
-                "required": [],
+                "required": []
             },
         ),
         types.Tool(
@@ -257,35 +251,32 @@ async def handle_list_tools() -> list[types.Tool]:
                     "limit": {
                         "type": "integer",
                         "description": "Maximum number of runs to return",
-                        "default": 1,
+                        "default": 1
                     },
                     "offset": {
                         "type": "integer",
                         "description": "Number of runs to skip",
-                        "default": 0,
+                        "default": 0
                     },
                     "order_by": {
                         "type": "string",
                         "description": "Field to order by (e.g. -start_date, start_date)",
-                        "default": "-start_date",
+                        "default": "-start_date"
                     },
                     "execution_date_gte": {
                         "type": "string",
-                        "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai",
-                        "required": False,
+                        "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai"
                     },
                     "execution_date_lte": {
                         "type": "string",
-                        "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai",
-                        "required": False,
+                        "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai"
                     },
                     "state": {
                         "type": "string",
-                        "description": "Filter by state (success, running, failed, etc.)",
-                        "required": False,
-                    },
+                        "description": "Filter by state (success, running, failed, etc.)"
+                    }
                 },
-                "required": ["dag_id"],
+                "required": ["dag_id"]
             },
         ),
         types.Tool(
@@ -298,16 +289,14 @@ async def handle_list_tools() -> list[types.Tool]:
                     "run_id": {"type": "string"},
                     "task_id": {
                         "type": "string",
-                        "description": "Get logs for specific task",
-                        "required": False,
+                        "description": "Get logs for specific task"
                     },
                     "try_number": {
                         "type": "integer",
-                        "description": "The try number of the task execution",
-                        "required": False,
-                    },
+                        "description": "The try number of the task execution"
+                    }
                 },
-                "required": ["dag_id", "run_id"],
+                "required": ["dag_id", "run_id"]
             },
         ),
         types.Tool(  # 新增的回填工具
