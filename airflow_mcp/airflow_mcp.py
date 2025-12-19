@@ -324,6 +324,49 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["dag_id", "start_date", "end_date"],
             },
         ),
+        types.Tool(
+            name="clear-task-instances",
+            description="Clear task instances for a DAG. This resets the state of tasks so they can be re-run.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dag_id": {"type": "string", "description": "The DAG ID"},
+                    "start_date": {"type": "string", "description": "Start date in YYYY-MM-DD format or ISO 8601 format"},
+                    "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format or ISO 8601 format"},
+                    "task_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional. List of task IDs to clear. If not specified, clear all tasks."
+                    },
+                    "only_failed": {
+                        "type": "boolean",
+                        "description": "If true, only clear failed task instances. Default: true. Note: only_failed and only_running cannot both be true.",
+                        "default": True
+                    },
+                    "only_running": {
+                        "type": "boolean",
+                        "description": "If true, only clear running task instances. Default: false. Note: only_failed and only_running cannot both be true.",
+                        "default": False
+                    },
+                    "include_subdags": {
+                        "type": "boolean",
+                        "description": "Whether to include subdags. Default: false",
+                        "default": False
+                    },
+                    "include_parentdag": {
+                        "type": "boolean",
+                        "description": "Whether to include parent DAG. Default: false",
+                        "default": False
+                    },
+                    "reset_dag_runs": {
+                        "type": "boolean",
+                        "description": "Whether to reset DAG run state to running. Default: true",
+                        "default": True
+                    }
+                },
+                "required": ["dag_id", "start_date", "end_date"],
+            },
+        ),
     ]
 
 @server.call_tool()
@@ -501,7 +544,132 @@ State: {log["state"]}
             ) for log in result
         ]
 
+    if name == "clear-task-instances":
+        dag_id = arguments.get("dag_id")
+        start_date = arguments.get("start_date")
+        end_date = arguments.get("end_date")
+        
+        if not dag_id or not start_date or not end_date:
+            raise ValueError("Missing required parameters: dag_id, start_date, and end_date are required")
+        
+        only_failed = arguments.get("only_failed", True)
+        only_running = arguments.get("only_running", False)
+        
+        # Validate mutual exclusivity
+        if only_failed and only_running:
+            raise ValueError("only_failed and only_running cannot both be true")
+        
+        result = await clear_task_instances(
+            dag_id=dag_id,
+            start_date=start_date,
+            end_date=end_date,
+            task_ids=arguments.get("task_ids"),
+            only_failed=only_failed,
+            only_running=only_running,
+            include_subdags=arguments.get("include_subdags", False),
+            include_parentdag=arguments.get("include_parentdag", False),
+            reset_dag_runs=arguments.get("reset_dag_runs", True)
+        )
+        
+        return [
+            types.TextContent(
+                type="text",
+                text=result
+            )
+        ]
+
     raise ValueError(f"Unknown tool: {name}")
+
+async def clear_task_instances(
+    dag_id: str,
+    start_date: str,
+    end_date: str,
+    task_ids: list[str] | None = None,
+    only_failed: bool = True,
+    only_running: bool = False,
+    include_subdags: bool = False,
+    include_parentdag: bool = False,
+    reset_dag_runs: bool = True
+) -> str:
+    """Clear task instances for a DAG.
+    
+    Args:
+        dag_id: The DAG ID
+        start_date: Start date in YYYY-MM-DD or ISO 8601 format
+        end_date: End date in YYYY-MM-DD or ISO 8601 format
+        task_ids: Optional list of task IDs to clear. If not specified, clears all tasks
+        only_failed: If true, only clear failed task instances
+        only_running: If true, only clear running task instances
+        include_subdags: Whether to include subdags
+        include_parentdag: Whether to include parent DAG
+        reset_dag_runs: Whether to reset DAG run state to running
+    """
+    def format_date(date_str: str) -> str:
+        """Convert date string to ISO 8601 format."""
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            # Validate if it's a valid ISO format
+            try:
+                datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return date_str
+            except (ValueError, AttributeError):
+                raise ValueError(f"Invalid date format: {date_str}. Please use YYYY-MM-DD or ISO 8601 format.")
+    
+    url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/clearTaskInstances"
+    
+    request_body = {
+        "start_date": format_date(start_date),
+        "end_date": format_date(end_date),
+        "only_failed": only_failed,
+        "only_running": only_running,
+        "include_subdags": include_subdags,
+        "include_parentdag": include_parentdag,
+        "reset_dag_runs": reset_dag_runs
+    }
+    
+    if task_ids:
+        request_body["task_ids"] = task_ids
+    
+    try:
+        data = await make_airflow_request(url, method="POST", json=request_body)
+        
+        if not data:
+            return f"Failed to clear task instances for DAG {dag_id}"
+        
+        result = [
+            f"Successfully cleared task instances for DAG {dag_id}",
+            "=" * 50
+        ]
+        
+        # Handle response data, supporting both list and dict formats
+        if isinstance(data, list):
+            result.append(f"Total cleared: {len(data)} task instances")
+            result.append("\nCleared task instances:")
+            for task_instance in data:
+                if isinstance(task_instance, dict):
+                    task_id = task_instance.get("task_id", "unknown")
+                    execution_date = task_instance.get("execution_date", "unknown")
+                    result.append(f"  - Task: {task_id}, Execution Date: {execution_date}")
+        elif isinstance(data, dict):
+            # If API returns dict format, try to get relevant information
+            task_instances = data.get("task_instances", [])
+            result.append(f"Total cleared: {len(task_instances)} task instances")
+            if task_instances:
+                result.append("\nCleared task instances:")
+                for task_instance in task_instances:
+                    if isinstance(task_instance, dict):
+                        task_id = task_instance.get("task_id", "unknown")
+                        execution_date = task_instance.get("execution_date", "unknown")
+                        result.append(f"  - Task: {task_id}, Execution Date: {execution_date}")
+        else:
+            result.append("Task instances cleared successfully")
+        
+        return "\n".join(result)
+        
+    except Exception as e:
+        return f"Error clearing task instances for DAG {dag_id}: {str(e)}"
 
 async def backfill_dag(dag_id: str, start_date: str, end_date: str, task_id: str | None = None) -> list[dict]:
     """执行DAG的回填操作。
