@@ -11,7 +11,7 @@
 - **批量获取 DAG 运行记录 (`list-dag-runs`)**: 批量获取 DAG 的运行记录。
 - **获取 DAG 运行状态 (`get-dag-status`)**: 获取特定 DAG 的运行状态。
 - **获取 DAG 日志 (`get-dag-logs`)**: 获取 DAG 运行的日志。
-- **回填 DAG (`backfill-dag`)**: 回填指定日期范围内的 DAG 数据。
+- **回填 DAG (`backfill-dag`)**: 回填指定日期范围内的 DAG 数据。支持通过可选的 `task_id` 参数指定回填特定任务，若不指定则回填整个 DAG。
 
 ## 使用
 ```json
