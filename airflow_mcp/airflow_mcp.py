@@ -312,13 +312,14 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(  # 新增的回填工具
             name="backfill-dag",
-            description="Backfill a DAG for a specified date range",
+            description="Backfill a DAG for a specified date range. Can optionally backfill only a specific task.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "dag_id": {"type": "string"},
                     "start_date": {"type": "string", "description": "Start date in YYYY-MM-DD format, timezone is Asia/Shanghai"},
                     "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format, timezone is Asia/Shanghai"},
+                    "task_id": {"type": "string", "description": "Optional. Task ID to backfill. If not specified, backfill the entire DAG.", "required": False},
                 },
                 "required": ["dag_id", "start_date", "end_date"],
             },
@@ -487,8 +488,9 @@ State: {data["state"]}
         dag_id = arguments.get("dag_id")
         start_date = arguments.get("start_date")
         end_date = arguments.get("end_date")
+        task_id = arguments.get("task_id")
         
-        result = await backfill_dag(dag_id, start_date, end_date)
+        result = await backfill_dag(dag_id, start_date, end_date, task_id)
         return [
             types.TextContent(
                 type="text",
@@ -502,8 +504,15 @@ State: {data["state"]}
 
     raise ValueError(f"Unknown tool: {name}")
 
-async def backfill_dag(dag_id: str, start_date: str, end_date: str) -> list[dict]:
-    """执行DAG的回填操作。"""
+async def backfill_dag(dag_id: str, start_date: str, end_date: str, task_id: str | None = None) -> list[dict]:
+    """执行DAG的回填操作。
+    
+    Args:
+        dag_id: DAG的ID
+        start_date: 开始日期，格式为YYYY-MM-DD
+        end_date: 结束日期，格式为YYYY-MM-DD
+        task_id: 可选的任务ID，如果指定则只回填该任务，否则回填整个DAG
+    """
     if not dag_id or not start_date or not end_date:
         raise ValueError("Missing dag_id, start_date, or end_date")
 
@@ -518,8 +527,13 @@ async def backfill_dag(dag_id: str, start_date: str, end_date: str) -> list[dict
     logs = []
     for date in date_range:
         url = f"{AIRFLOW_API_BASE}/dags/{dag_id}/dagRuns"
+        # 构建配置，如果指定了task_id，将其添加到conf中
+        conf = {}
+        if task_id:
+            conf["backfill_task_id"] = task_id
+        
         param = {
-            "conf": {},
+            "conf": conf,
             "dag_run_id": f"manual__{dag_id}_{date.isoformat()}Z",
             "logical_date": date.isoformat()+'Z'
         }
